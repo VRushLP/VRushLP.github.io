@@ -55,6 +55,8 @@ function GameEngine() {
     this.removedAgents = [];
 
     this.currentMusic = null;
+    this.healthBarVisible = false;
+    this.stageReset = false;
 
     //Initially set by main before game start.
     this.playerAgent;
@@ -93,12 +95,18 @@ GameEngine.prototype = {
 
     loadStage : function (stageNumber) {
         this.currentStage = stageNumber;
+        this.agents = [];
+        this.removedAgents = [];
         this.agents = this.stages[this.currentStage].entityList;
 
         this.playerAgent.entity.x = this.stages[this.currentStage].spawnX;
         this.playerAgent.entity.y = this.stages[this.currentStage].spawnY;
+        
+        this.playerAgent.readInput("reset");
+        this.agents.push(this.playerAgent);
 
         this.switchMusic(this.stages[this.currentStage].stageMusic);
+        this.stageReset = true;
     },
     
     resetStage : function () {
@@ -136,6 +144,7 @@ GameEngine.prototype = {
         
         //Request to switch to the stage music.
         this.switchMusic(this.stages[this.currentStage].stageMusic);
+        this.stageReset = true;
     },
 
     switchMusic : function (newMusic) {
@@ -220,15 +229,30 @@ GameEngine.prototype = {
 
     //Entities should check for input when updated here
     update : function () {
-        for (var i = 0; i < this.agents.length; i++) {
+        //Iterate backwards to avoid splice errors.
+        for (var i = this.agents.length - 1; i >= 0; i--) {
+            //If the stage has changed or been reset, then we need to restart the current update loop.
+            if (this.stageReset) {
+                this.stageReset = false;
+                break;
+            }
+            //If the agent has been flagged for removal, do so; otherwise, update it.
             if (this.agents[i].entity.removeFromWorld) {
                 var removedAgent = this.agents.splice(i, 1)[0];
                 //Save the removed agent for when the level restarts.
-                this.removedAgents.push(removedAgent);
-                removedAgent.entity.removeFromWorld = false;
-                continue;
+                //If the agent was only temporary, then let it get dereferenced and die.
+                if (!removedAgent.entity.temporary) {
+                    this.removedAgents.push(removedAgent);
+                    removedAgent.entity.removeFromWorld = false;
+                }
+                
+                //If the removed agent was the player, then respawn them.
+                if (removedAgent === this.playerAgent) {
+                    this.respawnPlayer();
+                }
+            } else {
+                this.agents[i].update();
             }
-            this.agents[i].update();
         }
 
         this.updateCamera();
@@ -303,8 +327,6 @@ GameEngine.prototype = {
 
     respawnPlayer: function () {
         this.resetStage();
-        //this.playerAgent.entity.x = this.stages[this.currentStage].spawnX;
-        //this.playerAgent.entity.y = this.stages[this.currentStage].spawnY;
     },
 
 
@@ -423,7 +445,7 @@ GameEngine.prototype = {
             if (!xMoveValid && !yMoveValid) {
                 
                 //Temporary fix to allow platforms to move the player.
-                if(other.controllable && other.moveable) {
+                if(other.controllable && other.moveable && !agent.entity.intangible) {
                     this.requestMove(this.agents[i], amountX, amountY);
                     if (agent.entity.pushesOnly) {
                        continue; 
@@ -619,18 +641,54 @@ GameEngine.prototype.loop = function () {
     this.draw();
 }
 
+GameEngine.prototype.drawRoundedRect = function(x, y, w, h) {
+    var r = 10;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x+r, y);
+    this.ctx.lineTo(x+w-r, y);
+    this.ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+    this.ctx.lineTo(x+w, y+h-r);
+    this.ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+    this.ctx.lineTo(x+r, y+h);
+    this.ctx.quadraticCurveTo(x, y+h, x, y+h-r);
+    this.ctx.lineTo(x, y+r);
+    this.ctx.quadraticCurveTo(x, y, x+r, y);
+    this.ctx.fill();
+}
+
 GameEngine.prototype.draw = function () {
     this.ctx.clearRect(0, 0, this.surfaceWidth, this.surfaceHeight);
     this.ctx.save();
-    for (var i = 0; i < this.stages.length; i++) {
-        this.stages[i].drawBackground(this.ctx, this.camera.x);
-    }
+    this.stages[this.currentStage].drawBackground(this.camera.x);
     for (var i = 0; i < this.agents.length; i++) {
-        if(this.isOnScreen(this.agents[i].entity)) {
-            this.agents[i].entity.draw(this.camera.x, this.camera.y);
+        
+        if (this.isOnScreen(this.agents[i].entity)) {
+            if (typeof this.agents[i].draw === 'function') {
+                this.agents[i].draw(this, this.camera.x, this.camera.y);
+            } else {
+                this.agents[i].entity.draw(this, this.camera.x, this.camera.y);
+            }
         }
     }
+    
+    this.drawHealthBar();
     this.ctx.restore();
+}
+
+GameEngine.prototype.drawHealthBar = function () {
+    if (!this.healthBarVisible) return;
+    
+    var percent = this.playerAgent.health / KNIGHT_ATTR.STARTING_HEALTH;
+    this.ctx.fillStyle = "#2C5D63";
+    this.drawRoundedRect(10, 10, 520, 50);
+    this.ctx.fillStyle = "black";
+    this.drawRoundedRect(20, 20, 500, 30);
+    if (percent > 0.4) {
+        this.ctx.fillStyle = "#A9C52F";
+    } else {
+        this.ctx.fillStyle = "red";
+    }
+    this.drawRoundedRect(20, 20, 500 * percent, 30);
 }
 
 /**
